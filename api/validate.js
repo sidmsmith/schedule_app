@@ -1,7 +1,7 @@
 // api/validate.js
 import fetch from 'node-fetch';
 
-const HA_WEBHOOK_URL = "http://sidmsmith.zapto.org:8123/api/webhook/manhattan_lpnlock";
+const HA_WEBHOOK_URL = "http://sidmsmith.zapto.org:8123/api/webhook/manhattan_scheduleapp";
 const AUTH_HOST = "salep-auth.sce.manh.com";
 const API_HOST = "salep.sce.manh.com";
 const CLIENT_ID = "omnicomponent.1.0.0";
@@ -10,17 +10,18 @@ const PASSWORD = "Blu3sk!es2300";
 const USERNAME_BASE = "sdtadmin@";
 
 // Helper: send to HA
-async function sendHA(action, org, success = 0, fail = 0, total = 0) {
-  console.log(`[HA] Sending: ${action} | Org: ${org}`);
+async function sendHA(action, org, deviceType = null) {
+  console.log(`[HA] Sending: ${action} | Org: ${org} | Device: ${deviceType || 'unknown'}`);
   try {
     const payload = {
-      type: "lpn_action",
+      type: "schedule_action",
       action,
-      org: org || "unknown",
-      success_count: success,
-      fail_count: fail,
-      total_count: total
+      org: org || "unknown"
     };
+    // Add device_type if provided
+    if (deviceType) {
+      payload.device_type = deviceType;
+    }
     const response = await fetch(HA_WEBHOOK_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -87,7 +88,8 @@ export default async function handler(req, res) {
 
   // === APP OPENED (NO ORG) ===
   if (action === 'app_opened') {
-    await sendHA("app_opened", "unknown");
+    const deviceType = req.body.device_type || null;
+    await sendHA("app_opened", "unknown", deviceType);
     return res.json({ success: true });
   }
 
@@ -95,11 +97,16 @@ export default async function handler(req, res) {
   if (action === 'auth') {
     const token = await getToken(org);
     if (!token) {
-      await sendHA("auth_failed", org);
       return res.json({ success: false, error: "Auth failed" });
     }
-    await sendHA("auth_success", org);  // ← FIXED
+    await sendHA("auth_success", org);
     return res.json({ success: true, token });
+  }
+
+  // === SCHEDULE ATTEMPTED (modal opened) ===
+  if (action === 'schedule_attempted') {
+    await sendHA("schedule_attempted", org || "unknown");
+    return res.json({ success: true });
   }
 
   // === GET CONDITION CODES ===
@@ -160,99 +167,17 @@ export default async function handler(req, res) {
     console.log('[schedule-appointment] Request', JSON.stringify({ org, payload }, null, 2));
     const scheduleRes = await apiCall('POST', '/appointment/api/appointment/scheduleAppointment', token, org, payload);
     console.log('[schedule-appointment] Response', JSON.stringify(scheduleRes, null, 2));
+    
+    // Send HA event if appointment was successfully scheduled
+    if (scheduleRes && scheduleRes.success !== false && !scheduleRes.error) {
+      await sendHA("schedule_confirmed", org);
+    }
+    
     return res.json(scheduleRes);
   }
 
-  const lpns = lpn?.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean) || [];
-  if (!lpns.length) return res.json({ error: "No LPNs" });
-
-  let success = 0, fail = 0;
-  const results = {};
-
-  for (const l of lpns) {
-    const searchRes = await apiCall('POST', '/dcinventory/api/dcinventory/inventory/search', token, org, {
-      Query: `InventoryContainerId = '${l}'`, Size: 1, Page: 0
-    });
-    const exists = searchRes?.header?.totalCount > 0;
-    if (!exists) {
-      results[l] = { error: "LPN does not exist" };
-      fail++;
-      continue;
-    }
-
-    if (action === 'lock') {
-      if (!code) { results[l] = { error: "No code" }; fail++; continue; }
-      const current = await apiCall('POST', '/dcinventory/api/dcinventory/containerCondition/search', token, org, {
-        Query: `InventoryContainerId = ${l} and InventoryContainerTypeId = ILPN`, Page: 0
-      });
-      const hasCode = current.data?.some(x => x.ConditionCode === code);
-      if (hasCode) {
-        results[l] = { error: `Already locked with ${code}` };
-        fail++;
-      } else {
-        const lockRes = await apiCall('POST', '/dcinventory/api/dcinventory/containerCondition/save', token, org, {
-          InventoryContainerTypeId: "ILPN",
-          CreatedBy: `sdtadmin@${org.toLowerCase()}`,
-          ConditionCode: code,
-          OrgId: org,
-          FacilityId: `${org}-DM1`,
-          UpdatedBy: `sdtadmin@${org.toLowerCase()}`,
-          InventoryContainerId: l
-        });
-        results[l] = lockRes;
-        if (lockRes.success !== false) success++; else fail++;
-      }
-    }
-
-    if (action === 'unlock') {
-      const current = await apiCall('POST', '/dcinventory/api/dcinventory/containerCondition/search', token, org, {
-        Query: `InventoryContainerId = ${l} and InventoryContainerTypeId = ILPN`, Page: 0
-      });
-      const codes = current.data?.map(x => x.ConditionCode) || [];
-      if (!codes.length) {
-        results[l] = { error: "No condition codes" };
-        fail++;
-        continue;
-      }
-
-      if (!code) {
-        for (const c of codes) {
-          if (!c) continue;
-          const delRes = await apiCall('POST', '/dcinventory/api/dcinventory/containerCondition/deleteContainerConditions', token, org, {
-            InventoryContainerTypeId: "ILPN",
-            CreatedBy: `sdtadmin@${org.toLowerCase()}`,
-            ConditionCode: c,
-            OrgId: org,
-            FacilityId: `${org}-DM1`,
-            UpdatedBy: `sdtadmin@${org.toLowerCase()}`,
-            InventoryContainerId: l
-          });
-          results[`${l} (remove ${c})`] = delRes;
-          if (delRes.success !== false) success++; else fail++;
-        }
-      } else {
-        if (!codes.includes(code)) {
-          results[l] = { error: `Not locked with ${code}` };
-          fail++;
-        } else {
-          const delRes = await apiCall('POST', '/dcinventory/api/dcinventory/containerCondition/deleteContainerConditions', token, org, {
-            InventoryContainerTypeId: "ILPN",
-            CreatedBy: `sdtadmin@${org.toLowerCase()}`,
-            ConditionCode: code,
-            OrgId: org,
-            FacilityId: `${org}-DM1`,
-            UpdatedBy: `sdtadmin@${org.toLowerCase()}`,
-            InventoryContainerId: l
-          });
-          results[l] = delRes;
-          if (delRes.success !== false) success++; else fail++;
-        }
-      }
-    }
-  }
-
-  await sendHA(action, org, success, fail, lpns.length);
-  res.json({ results, success, fail, total: lpns.length });
+  // Unknown action
+  return res.status(400).json({ error: "Unknown action" });
 }
 
 export const config = { api: { bodyParser: true } };

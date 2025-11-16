@@ -395,6 +395,13 @@ function openScheduleModal(slotDate, slotEl) {
   scheduleModal.hidden = false;
   showBackdrop();
   setTimeout(() => schedulePoInput?.focus(), 0);
+  
+  // Send HA event for schedule_attempted
+  if (currentOrg) {
+    api('schedule_attempted', { org: currentOrg }).catch(err => {
+      console.warn('Failed to send schedule_attempted event:', err);
+    });
+  }
 }
 
 function closeScheduleModal() {
@@ -1385,11 +1392,13 @@ async function api(action, data = {}) {
 window.addEventListener('load', async () => {
   loadTheme();
   try {
-    logConsole('Request: app_opened', { action: 'app_opened' });
+    // Detect device type
+    const deviceType = isMobileViewport ? 'mobile' : 'browser';
+    logConsole('Request: app_opened', { action: 'app_opened', device_type: deviceType });
     await fetch('/api/validate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'app_opened' })
+      body: JSON.stringify({ action: 'app_opened', device_type: deviceType })
     });
     logConsole('Response: app_opened', { success: true });
   } catch (err) {
