@@ -1338,14 +1338,14 @@ async function scheduleSlot(slotDate, slotEl) {
     openConfirmationModal('Appointment Scheduled', message);
     status(`Scheduled ${appointmentId}`, 'success');
     logConsole('Response: schedule_appointment', { success: true, appointmentId });
+    
+    // FIXED: Store details but don't download yet - user hasn't seen the toggle
     lastScheduledDetails = {
       appointmentId,
       slotDate: new Date(slotDate),
       durationMinutes: 60
     };
-    if (calendarDownloadEnabled) {
-      downloadIcs(lastScheduledDetails);
-    }
+    
     pendingSlot = null;
     await refreshDayColumn(slotDate);
     const refreshedSlotEl = findSlotElementForDate(slotDate);
@@ -1470,7 +1470,13 @@ scheduleConfirmBtn?.addEventListener('click', async () => {
   await scheduleSlot(pendingSlot.slotDate, pendingSlot.slotEl);
 });
 
+// FIXED: Download ICS based on toggle state when user closes confirmation modal
 modalCloseBtn?.addEventListener('click', () => {
+  // Check if ICS download is enabled and download if so
+  if (calendarDownloadEnabled && lastScheduledDetails) {
+    downloadIcs(lastScheduledDetails);
+  }
+  
   // After success, highlight the scheduled slot as a visual confirmation
   if (lastScheduledDetails?.slotDate) {
     const el = findSlotElementForDate(lastScheduledDetails.slotDate);
@@ -1478,6 +1484,7 @@ modalCloseBtn?.addEventListener('click', () => {
   }
   closeConfirmationModal();
 });
+
 // Prevent closing schedule/confirmation modals via backdrop; allow only theme modal
 modalBackdrop?.addEventListener('click', () => {
   if (isModalVisible(themeModal)) {
