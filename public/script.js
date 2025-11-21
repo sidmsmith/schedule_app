@@ -564,22 +564,12 @@ function renderCalendar() {
   // On mobile version, scroll to first available slot after initial render (only once)
   // This runs after the DOM is fully built, so we can safely query for slots
   if (isMobileViewport && !hasScrolledToFirstSlot && calendarInitialized) {
-    const triggerTime = new Date().toLocaleTimeString();
-    console.log(`[AUTO-SCROLL] Trigger scheduled at ${triggerTime} (after renderCalendar)`);
-    status(`⏱️ Auto-scroll scheduled at ${triggerTime}`, 'info');
-    
     // Use multiple animation frames and a delay to ensure DOM is fully rendered and painted
     requestAnimationFrame(() => {
-      console.log('[AUTO-SCROLL] First RAF after renderCalendar');
       requestAnimationFrame(() => {
-        console.log('[AUTO-SCROLL] Second RAF after renderCalendar');
         setTimeout(() => {
-          const delayTime = new Date().toLocaleTimeString();
-          console.log(`[AUTO-SCROLL] Delay completed at ${delayTime} - calling scrollToFirstAvailableSlot()`);
           if (!hasScrolledToFirstSlot) {
             scrollToFirstAvailableSlot();
-          } else {
-            console.log('[AUTO-SCROLL] Already scrolled, skipping');
           }
         }, 300);
       });
@@ -590,29 +580,13 @@ function renderCalendar() {
 function scrollToFirstAvailableSlot() {
   // Only scroll to first available slot on mobile version (not desktop/web)
   if (!isMobileViewport || !calendarGrid || hasScrolledToFirstSlot) {
-    if (isMobileViewport) {
-      console.log('[AUTO-SCROLL] Skipped - isMobile:', isMobileViewport, 'hasGrid:', !!calendarGrid, 'hasScrolled:', hasScrolledToFirstSlot);
-    }
     return;
   }
-
-  const timestamp = new Date().toLocaleTimeString();
-  console.log(`[AUTO-SCROLL] Attempting at ${timestamp} - slots check starting...`);
-
-  // Show visible debug message
-  const debugMsg = `🔍 Auto-scroll triggered at ${timestamp}`;
-  status(debugMsg, 'info');
-  
-  // Also log to console with details
-  logConsole('Auto-scroll attempt', { timestamp, hasScrolled: hasScrolledToFirstSlot });
 
   // Find all time slots that are not hidden
   const availableSlots = calendarGrid.querySelectorAll('.time-slot:not(.hidden-slot)');
   
-  console.log(`[AUTO-SCROLL] Found ${availableSlots.length} available slots`);
-  
   if (availableSlots.length === 0) {
-    console.log('[AUTO-SCROLL] No slots found - will retry in 300ms');
     // No available slots found - retry after a delay
     setTimeout(() => {
       if (!hasScrolledToFirstSlot) {
@@ -624,17 +598,13 @@ function scrollToFirstAvailableSlot() {
 
   // Get the first available slot
   const firstAvailableSlot = availableSlots[0];
-  const slotText = firstAvailableSlot.textContent?.trim() || 'unknown';
-  console.log(`[AUTO-SCROLL] First available slot: ${slotText}`);
 
   // Scroll to the slot with smooth behavior and some offset from top
   const scrollToSlot = () => {
     try {
       const rect = firstAvailableSlot.getBoundingClientRect();
-      console.log(`[AUTO-SCROLL] Element rect:`, { width: rect.width, height: rect.height, top: rect.top });
       
       if (rect.width === 0 && rect.height === 0) {
-        console.log('[AUTO-SCROLL] Element not laid out yet - will retry in 200ms');
         // Element not yet laid out, retry
         setTimeout(() => {
           if (!hasScrolledToFirstSlot) {
@@ -645,7 +615,6 @@ function scrollToFirstAvailableSlot() {
       }
 
       const offset = rect.top + window.scrollY - 100;
-      console.log(`[AUTO-SCROLL] Scrolling to offset: ${offset} (rect.top: ${rect.top}, scrollY: ${window.scrollY})`);
       
       window.scrollTo({ 
         top: Math.max(0, offset), 
@@ -654,34 +623,24 @@ function scrollToFirstAvailableSlot() {
 
       // Mark as scrolled
       hasScrolledToFirstSlot = true;
-      const scrollTime = new Date().toLocaleTimeString();
-      console.log(`[AUTO-SCROLL] ✅ Scroll completed at ${scrollTime}`);
-      status(`✅ Auto-scrolled to first available slot at ${scrollTime}`, 'success');
 
       // Focus the slot after scrolling
       setTimeout(() => {
         try {
           firstAvailableSlot.focus();
-          console.log('[AUTO-SCROLL] Focused on slot');
         } catch (e) {
-          console.log('[AUTO-SCROLL] Focus failed:', e);
+          // Ignore focus errors
         }
       }, 600);
     } catch (e) {
-      console.error('[AUTO-SCROLL] Error during scroll:', e);
       // Ignore scroll errors, but don't retry indefinitely
       hasScrolledToFirstSlot = true;
     }
   };
 
   // Use requestAnimationFrame to ensure DOM is painted
-  console.log('[AUTO-SCROLL] Scheduling scroll with requestAnimationFrame');
   requestAnimationFrame(() => {
-    console.log('[AUTO-SCROLL] First RAF callback');
-    requestAnimationFrame(() => {
-      console.log('[AUTO-SCROLL] Second RAF callback - executing scroll');
-      scrollToSlot();
-    });
+    requestAnimationFrame(scrollToSlot);
   });
 }
 
