@@ -115,6 +115,7 @@ let token = null;
 let currentOrg = null;
 let currentRangeStart = getEffectiveWeekStart(new Date());
 let calendarInitialized = false;
+let hasScrolledToFirstSlot = false;
 let slotLookup = new Map();
 let isFetching = false;
 let isScheduling = false;
@@ -561,6 +562,33 @@ function renderCalendar() {
   }
 }
 
+function scrollToFirstAvailableSlot() {
+  // Only scroll to first available slot on web version (not mobile)
+  if (isMobileViewport || !calendarGrid) return;
+
+  // Find all time slots that are not hidden
+  const availableSlots = calendarGrid.querySelectorAll('.time-slot:not(.hidden-slot)');
+  
+  if (availableSlots.length === 0) return;
+
+  // Get the first available slot
+  const firstAvailableSlot = availableSlots[0];
+
+  // Scroll to the slot with smooth behavior and some offset from top
+  requestAnimationFrame(() => {
+    const offset = firstAvailableSlot.getBoundingClientRect().top + window.scrollY - 100;
+    window.scrollTo({ 
+      top: offset, 
+      behavior: 'smooth' 
+    });
+
+    // Focus the slot after scrolling
+    setTimeout(() => {
+      firstAvailableSlot.focus();
+    }, 500);
+  });
+}
+
 function updateNavigationButtons() {
   if (!prevRangeBtn) return;
   const baselineIso = formatISODate(getEffectiveWeekStart(new Date()));
@@ -624,6 +652,9 @@ function buildDayColumn(dayDate) {
   column.className = 'day-column';
   column.dataset.day = formatISODate(dayDate);
   const now = new Date();
+  // Apply the same 5-hour offset to current time for accurate comparison
+  const nowWithOffset = new Date(now);
+  nowWithOffset.setHours(nowWithOffset.getHours() - DISPLAY_OFFSET_HOURS);
   column.innerHTML = `
     <div class="day-header">
       <div class="day-name">${dayDate.toLocaleDateString(undefined, { weekday: 'short' })}</div>
@@ -644,7 +675,7 @@ function buildDayColumn(dayDate) {
     const slotInfo = slotLookup.get(key);
     const slotActualDate = new Date(slotDate);
     slotActualDate.setHours(slotActualDate.getHours() - DISPLAY_OFFSET_HOURS);
-    const isPastSlot = slotActualDate < now;
+    const isPastSlot = slotActualDate < nowWithOffset;
 
     const label = formatHour(hour);
     let hideSlot = false;
@@ -806,6 +837,7 @@ function resetCalendarState() {
   appointmentCellMap.clear();
   slotLookup = new Map();
   activeWeekIso = null;
+  hasScrolledToFirstSlot = false;
   if (calendarGrid) {
     calendarGrid.innerHTML = '';
   }
@@ -1294,6 +1326,15 @@ async function loadAndRenderCalendar() {
     calendarInitialized = true;
     scheduleAutoRefresh();
     status('Calendar ready', 'success');
+    
+    // On web version, scroll to first available slot after initial load (only once)
+    if (!isMobileViewport && !hasScrolledToFirstSlot) {
+      // Use setTimeout to ensure calendar is fully rendered in DOM
+      setTimeout(() => {
+        scrollToFirstAvailableSlot();
+        hasScrolledToFirstSlot = true;
+      }, 300);
+    }
   } catch (err) {
     console.error('Calendar fetch failed', err);
     status(err.message || 'Calendar load failed', 'error');
