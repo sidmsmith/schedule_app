@@ -561,9 +561,9 @@ function renderCalendar() {
     });
   }
   
-  // On web version, scroll to first available slot after initial render (only once)
+  // On mobile version, scroll to first available slot after initial render (only once)
   // This runs after the DOM is fully built, so we can safely query for slots
-  if (!isMobileViewport && !hasScrolledToFirstSlot && calendarInitialized) {
+  if (isMobileViewport && !hasScrolledToFirstSlot && calendarInitialized) {
     const triggerTime = new Date().toLocaleTimeString();
     console.log(`[AUTO-SCROLL] Trigger scheduled at ${triggerTime} (after renderCalendar)`);
     status(`⏱️ Auto-scroll scheduled at ${triggerTime}`, 'info');
@@ -588,9 +588,9 @@ function renderCalendar() {
 }
 
 function scrollToFirstAvailableSlot() {
-  // Only scroll to first available slot on web version (not mobile)
-  if (isMobileViewport || !calendarGrid || hasScrolledToFirstSlot) {
-    if (!isMobileViewport) {
+  // Only scroll to first available slot on mobile version (not desktop/web)
+  if (!isMobileViewport || !calendarGrid || hasScrolledToFirstSlot) {
+    if (isMobileViewport) {
       console.log('[AUTO-SCROLL] Skipped - isMobile:', isMobileViewport, 'hasGrid:', !!calendarGrid, 'hasScrolled:', hasScrolledToFirstSlot);
     }
     return;
