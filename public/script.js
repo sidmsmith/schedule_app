@@ -560,32 +560,85 @@ function renderCalendar() {
       window.scrollTo({ top: previousScrollY });
     });
   }
+  
+  // On web version, scroll to first available slot after initial render (only once)
+  // This runs after the DOM is fully built, so we can safely query for slots
+  if (!isMobileViewport && !hasScrolledToFirstSlot && calendarInitialized) {
+    // Use multiple animation frames and a delay to ensure DOM is fully rendered and painted
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          if (!hasScrolledToFirstSlot) {
+            scrollToFirstAvailableSlot();
+          }
+        }, 300);
+      });
+    });
+  }
 }
 
 function scrollToFirstAvailableSlot() {
   // Only scroll to first available slot on web version (not mobile)
-  if (isMobileViewport || !calendarGrid) return;
+  if (isMobileViewport || !calendarGrid || hasScrolledToFirstSlot) {
+    return;
+  }
 
   // Find all time slots that are not hidden
   const availableSlots = calendarGrid.querySelectorAll('.time-slot:not(.hidden-slot)');
   
-  if (availableSlots.length === 0) return;
+  if (availableSlots.length === 0) {
+    // No available slots found - retry after a delay
+    setTimeout(() => {
+      if (!hasScrolledToFirstSlot) {
+        scrollToFirstAvailableSlot();
+      }
+    }, 300);
+    return;
+  }
 
   // Get the first available slot
   const firstAvailableSlot = availableSlots[0];
 
   // Scroll to the slot with smooth behavior and some offset from top
-  requestAnimationFrame(() => {
-    const offset = firstAvailableSlot.getBoundingClientRect().top + window.scrollY - 100;
-    window.scrollTo({ 
-      top: offset, 
-      behavior: 'smooth' 
-    });
+  const scrollToSlot = () => {
+    try {
+      const rect = firstAvailableSlot.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) {
+        // Element not yet laid out, retry
+        setTimeout(() => {
+          if (!hasScrolledToFirstSlot) {
+            scrollToFirstAvailableSlot();
+          }
+        }, 200);
+        return;
+      }
 
-    // Focus the slot after scrolling
-    setTimeout(() => {
-      firstAvailableSlot.focus();
-    }, 500);
+      const offset = rect.top + window.scrollY - 100;
+      window.scrollTo({ 
+        top: Math.max(0, offset), 
+        behavior: 'smooth' 
+      });
+
+      // Mark as scrolled
+      hasScrolledToFirstSlot = true;
+
+      // Focus the slot after scrolling
+      setTimeout(() => {
+        try {
+          firstAvailableSlot.focus();
+        } catch (e) {
+          // Ignore focus errors
+        }
+      }, 600);
+    } catch (e) {
+      // Ignore scroll errors, but don't retry indefinitely
+      hasScrolledToFirstSlot = true;
+    }
+  };
+
+  // Use requestAnimationFrame to ensure DOM is painted
+  requestAnimationFrame(() => {
+    requestAnimationFrame(scrollToSlot);
   });
 }
 
@@ -1323,18 +1376,15 @@ async function loadAndRenderCalendar() {
         loadedWeeks.push(keepWeek);
       }
     }
+    
+    // Set calendarInitialized BEFORE final render so scroll logic can run
     calendarInitialized = true;
     scheduleAutoRefresh();
     status('Calendar ready', 'success');
     
-    // On web version, scroll to first available slot after initial load (only once)
-    if (!isMobileViewport && !hasScrolledToFirstSlot) {
-      // Use setTimeout to ensure calendar is fully rendered in DOM
-      setTimeout(() => {
-        scrollToFirstAvailableSlot();
-        hasScrolledToFirstSlot = true;
-      }, 300);
-    }
+    // Trigger a final renderCalendar to ensure scroll happens after all data is loaded
+    // The scroll logic is now in renderCalendar() itself and will run after this render
+    renderCalendar();
   } catch (err) {
     console.error('Calendar fetch failed', err);
     status(err.message || 'Calendar load failed', 'error');
