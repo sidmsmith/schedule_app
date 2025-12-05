@@ -1,37 +1,12 @@
 // api/validate.js
 import fetch from 'node-fetch';
 
-const HA_WEBHOOK_URL = "http://sidmsmith.zapto.org:8123/api/webhook/manhattan_scheduleapp";
 const AUTH_HOST = "salep-auth.sce.manh.com";
 const API_HOST = "salep.sce.manh.com";
 const CLIENT_ID = "omnicomponent.1.0.0";
 const CLIENT_SECRET = "b4s8rgTyg55XYNun";
 const PASSWORD = "Blu3sk!es2300";
 const USERNAME_BASE = "sdtadmin@";
-
-// Helper: send to HA
-async function sendHA(action, org, deviceType = null) {
-  console.log(`[HA] Sending: ${action} | Org: ${org} | Device: ${deviceType || 'unknown'}`);
-  try {
-    const payload = {
-      type: "schedule_action",
-      action,
-      org: org || "unknown"
-    };
-    // Add device_type if provided
-    if (deviceType) {
-      payload.device_type = deviceType;
-    }
-    const response = await fetch(HA_WEBHOOK_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    console.log(`[HA] Status: ${response.status}`);
-  } catch (e) {
-    console.error("[HA] ERROR:", e.message);
-  }
-}
 
 // Get OAuth token
 async function getToken(org) {
@@ -88,8 +63,6 @@ export default async function handler(req, res) {
 
   // === APP OPENED (NO ORG) ===
   if (action === 'app_opened') {
-    const deviceType = req.body.device_type || null;
-    await sendHA("app_opened", "unknown", deviceType);
     return res.json({ success: true });
   }
 
@@ -99,13 +72,11 @@ export default async function handler(req, res) {
     if (!token) {
       return res.json({ success: false, error: "Auth failed" });
     }
-    await sendHA("auth_success", org);
     return res.json({ success: true, token });
   }
 
   // === SCHEDULE ATTEMPTED (modal opened) ===
   if (action === 'schedule_attempted') {
-    await sendHA("schedule_attempted", org || "unknown");
     return res.json({ success: true });
   }
 
@@ -167,11 +138,6 @@ export default async function handler(req, res) {
     console.log('[schedule-appointment] Request', JSON.stringify({ org, payload }, null, 2));
     const scheduleRes = await apiCall('POST', '/appointment/api/appointment/scheduleAppointment', token, org, payload);
     console.log('[schedule-appointment] Response', JSON.stringify(scheduleRes, null, 2));
-    
-    // Send HA event if appointment was successfully scheduled
-    if (scheduleRes && scheduleRes.success !== false && !scheduleRes.error) {
-      await sendHA("schedule_confirmed", org);
-    }
     
     return res.json(scheduleRes);
   }
