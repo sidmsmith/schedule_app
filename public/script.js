@@ -1411,6 +1411,16 @@ async function scheduleSlot(slotDate, slotEl) {
   isScheduling = true;
   status('Scheduling appointment...', 'info');
   logConsole('Request: schedule_appointment', { preferredDateTime });
+  
+  // Track schedule attempt in Statsig
+  if (window.StatsigTracking && window.StatsigTracking.isInitialized()) {
+    window.StatsigTracking.logEvent('schedule_appointment_attempt', {
+      org: currentOrg,
+      preferred_date_time: preferredDateTime,
+      timestamp: new Date().toISOString()
+    });
+  }
+  
   slotEl?.setAttribute('disabled', 'disabled');
   slotEl?.classList.add('disabled-slot');
   scheduleConfirmBtn?.setAttribute('disabled', 'disabled');
@@ -1432,6 +1442,16 @@ async function scheduleSlot(slotDate, slotEl) {
     status(`Scheduled ${appointmentId}`, 'success');
     logConsole('Response: schedule_appointment', { success: true, appointmentId });
     
+    // Track schedule success in Statsig
+    if (window.StatsigTracking && window.StatsigTracking.isInitialized()) {
+      window.StatsigTracking.logEvent('schedule_appointment_completed', {
+        org: currentOrg,
+        appointment_id: appointmentId,
+        preferred_date_time: preferredDateTime,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
     // FIXED: Store details but don't download yet - user hasn't seen the toggle
     lastScheduledDetails = {
       appointmentId,
@@ -1449,6 +1469,17 @@ async function scheduleSlot(slotDate, slotEl) {
     console.error('schedule appointment failed', err);
     status(err.message || 'Scheduling failed', 'error');
     logConsole('Error: schedule_appointment', err.message || err.toString());
+    
+    // Track schedule failure in Statsig
+    if (window.StatsigTracking && window.StatsigTracking.isInitialized()) {
+      window.StatsigTracking.logEvent('schedule_appointment_failed', {
+        org: currentOrg,
+        preferred_date_time: preferredDateTime,
+        error: err.message || 'Scheduling failed',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
     if (scheduleError) {
       scheduleError.textContent = err.message || 'Scheduling failed';
       scheduleError.hidden = false;
@@ -1511,7 +1542,24 @@ async function handleAuth() {
   const org = orgInput?.value.trim();
   if (!org) {
     status('ORG required', 'error');
+    
+    // Track auth failure in Statsig
+    if (window.StatsigTracking && window.StatsigTracking.isInitialized()) {
+      window.StatsigTracking.logEvent('auth_failed', {
+        error: 'ORG required',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
     return;
+  }
+
+  // Track auth attempt in Statsig
+  if (window.StatsigTracking && window.StatsigTracking.isInitialized()) {
+    window.StatsigTracking.logEvent('auth_attempt', {
+      org: org,
+      timestamp: new Date().toISOString()
+    });
   }
 
   status('Authenticating...');
@@ -1522,6 +1570,16 @@ async function handleAuth() {
     if (mainUI?.style) mainUI.style.display = 'none';
     resetWorkspace();
     logConsole('Response: auth', { success: false, error: res.error || 'Auth failed' });
+    
+    // Track auth failure in Statsig
+    if (window.StatsigTracking && window.StatsigTracking.isInitialized()) {
+      window.StatsigTracking.logEvent('auth_failed', {
+        org: org,
+        error: res.error || 'Auth failed',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
     return;
   }
 
@@ -1532,6 +1590,15 @@ async function handleAuth() {
   if (mainUI?.style) mainUI.style.display = 'block';
   workspace?.classList.add('unlocked');
   authSection?.classList.add('d-none');
+  
+  // Track auth success in Statsig
+  if (window.StatsigTracking && window.StatsigTracking.isInitialized()) {
+    window.StatsigTracking.logEvent('auth_success', {
+      org: org,
+      timestamp: new Date().toISOString()
+    });
+  }
+  
   await loadAndRenderCalendar();
 }
 
