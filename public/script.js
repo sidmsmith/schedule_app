@@ -403,6 +403,14 @@ function openScheduleModal(slotDate, slotEl) {
       console.warn('Failed to send schedule_attempted event:', err);
     });
   }
+  
+  // Track schedule attempt in Statsig (when modal opens)
+  if (window.StatsigTracking && window.StatsigTracking.isInitialized()) {
+    window.StatsigTracking.logEvent('schedule_attempted', {
+      org: currentOrg || 'unknown',
+      timestamp: new Date().toISOString()
+    });
+  }
 }
 
 function closeScheduleModal() {
