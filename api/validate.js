@@ -8,6 +8,10 @@ const CLIENT_SECRET = "b4s8rgTyg55XYNun";
 const PASSWORD = "Blu3sk!es2300";
 const USERNAME_BASE = "sdtadmin@";
 
+const HA_WEBHOOK_URL = process.env.HA_WEBHOOK_URL || "http://sidmsmith.zapto.org:8123/api/webhook/manhattan_app_usage";
+const APP_NAME = "schedule-app";
+const APP_VERSION = "0.1.5";
+
 // Get OAuth token
 async function getToken(org) {
   const url = `https://${AUTH_HOST}/oauth/token`;
@@ -50,6 +54,27 @@ async function apiCall(method, path, token, org, body = null) {
   return res.ok ? await res.json() : { error: await res.text() };
 }
 
+// Send HA message helper
+async function sendHAMessage(eventName, metadata = {}) {
+  try {
+    const payload = {
+      event_name: eventName,
+      app_name: APP_NAME,
+      app_version: APP_VERSION,
+      timestamp: new Date().toISOString(),
+      ...metadata
+    };
+    
+    await fetch(HA_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  } catch (error) {
+    console.error('[HA] Failed to send message:', error.message);
+  }
+}
+
 // Export handler
 export default async function handler(req, res) {
   console.log(`[API] ${req.method} ${req.url}`);
@@ -60,6 +85,15 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { action, org, lpn, code } = req.body;
+
+  // === HA TRACK ENDPOINT ===
+  if (action === 'ha-track') {
+    const { eventName, metadata } = req.body;
+    if (eventName) {
+      await sendHAMessage(eventName, metadata);
+    }
+    return res.json({ success: true });
+  }
 
   // === APP OPENED (NO ORG) ===
   if (action === 'app_opened') {

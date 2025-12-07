@@ -139,6 +139,99 @@ const DEFAULT_THEME_KEY = 'minimal-light';
 const urlParams = new URLSearchParams(window.location.search);
 const USE_MOCK_DATA = urlParams.has('mock');
 
+// === Generic Metadata Collection ===
+const sessionId = sessionStorage.getItem('sessionId') || `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+sessionStorage.setItem('sessionId', sessionId);
+const pageLoadTime = performance.timing ? performance.timing.navigationStart : Date.now();
+let authAttemptCount = parseInt(sessionStorage.getItem('authAttemptCount') || '0', 10);
+let firstAuthSuccess = sessionStorage.getItem('firstAuthSuccess') || null;
+
+function getBrowserName() {
+  const ua = navigator.userAgent;
+  if (ua.includes('Firefox')) return 'Firefox';
+  if (ua.includes('Chrome') && !ua.includes('Edg')) return 'Chrome';
+  if (ua.includes('Safari') && !ua.includes('Chrome')) return 'Safari';
+  if (ua.includes('Edg')) return 'Edge';
+  return 'Unknown';
+}
+
+function getBrowserVersion() {
+  const ua = navigator.userAgent;
+  const match = ua.match(/(?:Firefox|Chrome|Safari|Edg(?:e)?)\/(\d+)/);
+  return match ? match[1] : 'Unknown';
+}
+
+function getOSName() {
+  const ua = navigator.userAgent;
+  if (ua.includes('Windows')) return 'Windows';
+  if (ua.includes('Mac')) return 'macOS';
+  if (ua.includes('Linux')) return 'Linux';
+  if (ua.includes('Android')) return 'Android';
+  if (ua.includes('iOS')) return 'iOS';
+  return 'Unknown';
+}
+
+function getOSVersion() {
+  const ua = navigator.userAgent;
+  if (ua.includes('Windows NT 10.0')) return '10';
+  if (ua.includes('Windows NT 6.3')) return '8.1';
+  if (ua.includes('Windows NT 6.2')) return '8';
+  if (ua.includes('Mac OS X')) {
+    const match = ua.match(/Mac OS X (\d+[._]\d+)/);
+    return match ? match[1].replace('_', '.') : 'Unknown';
+  }
+  return 'Unknown';
+}
+
+function getDeviceType() {
+  const ua = navigator.userAgent;
+  if (/tablet|ipad|playbook|silk/i.test(ua)) return 'tablet';
+  if (/mobile|iphone|ipod|android|blackberry|opera|mini|windows\sce|palm|smartphone|iemobile/i.test(ua)) return 'mobile';
+  return 'desktop';
+}
+
+function getCommonMetadata() {
+  return {
+    session_id: sessionId,
+    page_load_time: pageLoadTime,
+    auth_attempt_count: authAttemptCount,
+    first_auth_success: firstAuthSuccess,
+    browser_name: getBrowserName(),
+    browser_version: getBrowserVersion(),
+    os_name: getOSName(),
+    os_version: getOSVersion(),
+    device_type: getDeviceType(),
+    screen_width: window.screen.width,
+    screen_height: window.screen.height,
+    viewport_width: window.innerWidth,
+    viewport_height: window.innerHeight,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    url_params: Object.fromEntries(urlParams.entries()),
+    referrer: document.referrer || 'direct'
+  };
+}
+
+// === HA Tracking Helper ===
+async function trackEvent(eventName, metadata = {}) {
+  try {
+    const commonMetadata = getCommonMetadata();
+    const payload = {
+      eventName,
+      metadata: {
+        ...commonMetadata,
+        ...metadata
+      }
+    };
+    await fetch('/api/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'ha-track', ...payload })
+    });
+  } catch (error) {
+    // Silent fail - don't interrupt user experience
+  }
+}
+
 const THEMES = {
   default: {
     name: 'Default (Dark)',
@@ -397,20 +490,16 @@ function openScheduleModal(slotDate, slotEl) {
   showBackdrop();
   setTimeout(() => schedulePoInput?.focus(), 0);
   
-  // Send HA event for schedule_attempted
-  if (currentOrg) {
-    api('schedule_attempted', { org: currentOrg }).catch(err => {
-      console.warn('Failed to send schedule_attempted event:', err);
-    });
-  }
-  
-  // Track schedule attempt in Statsig (when modal opens)
-  if (window.StatsigTracking && window.StatsigTracking.isInitialized()) {
-    window.StatsigTracking.logEvent('schedule_attempted', {
-      org: currentOrg || 'unknown',
-      timestamp: new Date().toISOString()
-    });
-  }
+  // Track schedule attempt (when modal opens)
+  const slotInfo = slotLookup.get(formatAPIDateTime(slotDate));
+  trackEvent('schedule_attempted', {
+    org: currentOrg || 'unknown',
+    slot_date: formatAPIDateTime(slotDate),
+    slot_display_time: slotDate.toLocaleString(),
+    slot_utilization: slotInfo?.capacityUtilization || null,
+    slot_capacity: slotInfo?.capacity || null,
+    slot_total_appointments: slotInfo?.totalAppointments || null
+  });
 }
 
 function closeScheduleModal() {
@@ -872,11 +961,18 @@ async function loadWeek(weekStartDate, position = 'append') {
   }
   pendingWeekLoads.add(weekIso);
   logConsole('Week load start', { weekIso, position });
+  const loadStartTime = Date.now();
+  let slotCount = 0;
   try {
     for (let i = 0; i < DAY_COUNT; i++) {
       const targetDate = addDays(weekStartDate, i);
       const apiResponse = await fetchCalendarData(targetDate);
       slotLookup = buildSlotLookup(apiResponse, slotLookup);
+      // Count slots from this day
+      const dayIso = formatISODate(targetDate);
+      for (const key of slotLookup.keys()) {
+        if (key.startsWith(dayIso)) slotCount++;
+      }
     }
     weekData.set(weekIso, true);
     addWeekToList(weekIso);
@@ -885,6 +981,16 @@ async function loadWeek(weekStartDate, position = 'append') {
     }
     renderCalendar();
     logConsole('Week load complete', { weekIso, totalWeeks: loadedWeeks.length });
+    
+    // Track calendar load
+    const loadDuration = Date.now() - loadStartTime;
+    trackEvent('calendar_load', {
+      org: currentOrg || 'unknown',
+      target_date: weekStartDate.toISOString().split('T')[0],
+      week_iso: weekIso,
+      slot_count: slotCount,
+      load_duration_ms: loadDuration
+    });
   } catch (error) {
     logConsole('Week load error', { weekIso, error: error?.message || error });
     throw error;
@@ -1147,6 +1253,14 @@ function downloadIcs(details) {
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+  
+  // Track ICS download
+  trackEvent('ics_download', {
+    org: currentOrg || 'unknown',
+    appointment_id: details.appointmentId || null,
+    slot_date: details.slotDate ? new Date(details.slotDate).toISOString() : null,
+    duration_minutes: details.durationMinutes || 60
+  });
 }
 
 function highlightSlot(slot) {
@@ -1180,18 +1294,35 @@ function handleAppointmentSearch(event) {
   }
   let found = false;
   const normalized = terms.map(normalizeAppointmentId);
+  const matchedIds = [];
   normalized.forEach(term => {
     const slot = appointmentCellMap.get(term);
     if (slot) {
       found = true;
+      matchedIds.push(term);
       highlightSlot(slot);
     }
   });
   if (found) {
     clearSearchError();
     pulseLegendForUtilization(findFirstUtilization(normalized));
+    trackEvent('appointment_search_completed', {
+      org: currentOrg || 'unknown',
+      search_terms: normalized,
+      search_term_count: normalized.length,
+      matches_found: true,
+      match_count: matchedIds.length,
+      matched_appointment_ids: matchedIds
+    });
   } else {
     showSearchError('No Appointment Found');
+    trackEvent('appointment_search_failed', {
+      org: currentOrg || 'unknown',
+      search_terms: normalized,
+      search_term_count: normalized.length,
+      matches_found: false,
+      error: 'No Appointment Found'
+    });
   }
   if (isMobileViewport) setSearchCollapsed(true);
 }
@@ -1420,14 +1551,19 @@ async function scheduleSlot(slotDate, slotEl) {
   status('Scheduling appointment...', 'info');
   logConsole('Request: schedule_appointment', { preferredDateTime });
   
-  // Track schedule attempt in Statsig
-  if (window.StatsigTracking && window.StatsigTracking.isInitialized()) {
-    window.StatsigTracking.logEvent('schedule_appointment_attempt', {
-      org: currentOrg,
-      preferred_date_time: preferredDateTime,
-      timestamp: new Date().toISOString()
-    });
-  }
+  const poNumber = schedulePoInput?.value.trim() || null;
+  const driverName = scheduleDriverInput?.value.trim() || null;
+  
+  // Track schedule attempt
+  trackEvent('schedule_appointment_attempt', {
+    org: currentOrg,
+    preferred_date_time: preferredDateTime,
+    appointment_type_id: 'DROP_UNLOAD',
+    equipment_type_id: '48FT',
+    duration_minutes: 60,
+    po_number: poNumber,
+    driver_name: driverName
+  });
   
   slotEl?.setAttribute('disabled', 'disabled');
   slotEl?.classList.add('disabled-slot');
@@ -1450,15 +1586,17 @@ async function scheduleSlot(slotDate, slotEl) {
     status(`Scheduled ${appointmentId}`, 'success');
     logConsole('Response: schedule_appointment', { success: true, appointmentId });
     
-    // Track schedule success in Statsig
-    if (window.StatsigTracking && window.StatsigTracking.isInitialized()) {
-      window.StatsigTracking.logEvent('schedule_appointment_completed', {
-        org: currentOrg,
-        appointment_id: appointmentId,
-        preferred_date_time: preferredDateTime,
-        timestamp: new Date().toISOString()
-      });
-    }
+    // Track schedule success
+    trackEvent('schedule_appointment_completed', {
+      org: currentOrg,
+      appointment_id: appointmentId,
+      preferred_date_time: preferredDateTime,
+      appointment_type_id: 'DROP_UNLOAD',
+      equipment_type_id: '48FT',
+      duration_minutes: 60,
+      po_number: poNumber,
+      driver_name: driverName
+    });
     
     // FIXED: Store details but don't download yet - user hasn't seen the toggle
     lastScheduledDetails = {
@@ -1478,15 +1616,17 @@ async function scheduleSlot(slotDate, slotEl) {
     status(err.message || 'Scheduling failed', 'error');
     logConsole('Error: schedule_appointment', err.message || err.toString());
     
-    // Track schedule failure in Statsig
-    if (window.StatsigTracking && window.StatsigTracking.isInitialized()) {
-      window.StatsigTracking.logEvent('schedule_appointment_failed', {
-        org: currentOrg,
-        preferred_date_time: preferredDateTime,
-        error: err.message || 'Scheduling failed',
-        timestamp: new Date().toISOString()
-      });
-    }
+    // Track schedule failure
+    trackEvent('schedule_appointment_failed', {
+      org: currentOrg,
+      preferred_date_time: preferredDateTime,
+      appointment_type_id: 'DROP_UNLOAD',
+      equipment_type_id: '48FT',
+      duration_minutes: 60,
+      po_number: poNumber,
+      driver_name: driverName,
+      error: err.message || 'Scheduling failed'
+    });
     
     if (scheduleError) {
       scheduleError.textContent = err.message || 'Scheduling failed';
@@ -1523,20 +1663,11 @@ async function api(action, data = {}) {
 
 window.addEventListener('load', async () => {
   loadTheme();
-  try {
-    // Detect device type
-    const deviceType = isMobileViewport ? 'mobile' : 'browser';
-    logConsole('Request: app_opened', { action: 'app_opened', device_type: deviceType });
-    await fetch('/api/validate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'app_opened', device_type: deviceType })
-    });
-    logConsole('Response: app_opened', { success: true });
-  } catch (err) {
-    console.error('App init failed', err);
-    logConsole('Error: app_opened', err.message || err.toString());
-  }
+  // Track app opened
+  trackEvent('app_opened', {
+    has_url_params: String(window.location.search.length > 0),
+    is_mock_mode: USE_MOCK_DATA
+  });
   if (orgInput) {
     orgInput.value = DEFAULT_ORG;
   }
@@ -1551,24 +1682,22 @@ async function handleAuth() {
   if (!org) {
     status('ORG required', 'error');
     
-    // Track auth failure in Statsig
-    if (window.StatsigTracking && window.StatsigTracking.isInitialized()) {
-      window.StatsigTracking.logEvent('auth_failed', {
-        error: 'ORG required',
-        timestamp: new Date().toISOString()
-      });
-    }
+    // Track auth failure
+    authAttemptCount++;
+    sessionStorage.setItem('authAttemptCount', authAttemptCount.toString());
+    trackEvent('auth_failed', {
+      error: 'ORG required'
+    });
     
     return;
   }
 
-  // Track auth attempt in Statsig
-  if (window.StatsigTracking && window.StatsigTracking.isInitialized()) {
-    window.StatsigTracking.logEvent('auth_attempt', {
-      org: org,
-      timestamp: new Date().toISOString()
-    });
-  }
+  // Track auth attempt
+  authAttemptCount++;
+  sessionStorage.setItem('authAttemptCount', authAttemptCount.toString());
+  trackEvent('auth_attempt', {
+    org: org
+  });
 
   status('Authenticating...');
   logConsole('Request: auth', { org });
@@ -1579,14 +1708,11 @@ async function handleAuth() {
     resetWorkspace();
     logConsole('Response: auth', { success: false, error: res.error || 'Auth failed' });
     
-    // Track auth failure in Statsig
-    if (window.StatsigTracking && window.StatsigTracking.isInitialized()) {
-      window.StatsigTracking.logEvent('auth_failed', {
-        org: org,
-        error: res.error || 'Auth failed',
-        timestamp: new Date().toISOString()
-      });
-    }
+    // Track auth failure
+    trackEvent('auth_failed', {
+      org: org,
+      error: res.error || 'Auth failed'
+    });
     
     return;
   }
@@ -1599,13 +1725,14 @@ async function handleAuth() {
   workspace?.classList.add('unlocked');
   authSection?.classList.add('d-none');
   
-  // Track auth success in Statsig
-  if (window.StatsigTracking && window.StatsigTracking.isInitialized()) {
-    window.StatsigTracking.logEvent('auth_success', {
-      org: org,
-      timestamp: new Date().toISOString()
-    });
+  // Track auth success
+  if (!firstAuthSuccess) {
+    firstAuthSuccess = new Date().toISOString();
+    sessionStorage.setItem('firstAuthSuccess', firstAuthSuccess);
   }
+  trackEvent('auth_success', {
+    org: org
+  });
   
   await loadAndRenderCalendar();
 }
@@ -1681,6 +1808,7 @@ document.addEventListener('keydown', e => {
 async function handlePrevJump(button) {
   if (!calendarInitialized || isFetching) return;
   flashNavButton(button);
+  let targetWeekIso = null;
   if (isMobileViewport) {
     // Mobile: strictly go one week back from mobileNavIso
     const baseline = mobileNavIso || formatISODate(getEffectiveWeekStart(new Date()));
@@ -1688,33 +1816,44 @@ async function handlePrevJump(button) {
     await ensureWeekLoaded(prevIso);
     mobileNavIso = prevIso;
     activeWeekIso = prevIso;
+    targetWeekIso = prevIso;
     scrollToWeekStart(prevIso);
-    return;
-  }
-  // Desktop: Replace current week with previous week
-  const baselineIso = formatISODate(getEffectiveWeekStart(new Date()));
-  const currentIso = activeWeekIso || baselineIso;
-  if (!currentIso || currentIso === baselineIso) return;
-  const previousIso = formatISODate(addDays(parseISODate(currentIso), -WEEK_STEP));
-  await ensureWeekLoaded(previousIso);
-  if (!weekData.has(previousIso)) return;
-  activeWeekIso = previousIso;
-  currentRangeStart = parseISODate(activeWeekIso);
-  // On desktop, clear old weeks and keep only the active one
-  if (!isMobileViewport) {
+  } else {
+    // Desktop: Replace current week with previous week
+    const baselineIso = formatISODate(getEffectiveWeekStart(new Date()));
+    const currentIso = activeWeekIso || baselineIso;
+    if (!currentIso || currentIso === baselineIso) return;
+    const previousIso = formatISODate(addDays(parseISODate(currentIso), -WEEK_STEP));
+    await ensureWeekLoaded(previousIso);
+    if (!weekData.has(previousIso)) return;
+    activeWeekIso = previousIso;
+    targetWeekIso = previousIso;
+    currentRangeStart = parseISODate(activeWeekIso);
+    // On desktop, clear old weeks and keep only the active one
     const keepWeek = activeWeekIso;
     loadedWeeks.length = 0;
     if (keepWeek && weekData.has(keepWeek)) {
       loadedWeeks.push(keepWeek);
     }
+    renderCalendar();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
-  renderCalendar();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  
+  // Track calendar navigation
+  if (targetWeekIso) {
+    trackEvent('calendar_navigation', {
+      org: currentOrg || 'unknown',
+      direction: 'previous',
+      week_start: targetWeekIso,
+      is_mobile: isMobileViewport
+    });
+  }
 }
 
 async function handleNextJump(button) {
   if (!calendarInitialized || isFetching) return;
   flashNavButton(button);
+  let targetWeekIso = null;
   if (isMobileViewport) {
     // Mobile: strictly go one week forward from mobileNavIso
     const baseline = mobileNavIso || formatISODate(getEffectiveWeekStart(new Date()));
@@ -1722,27 +1861,37 @@ async function handleNextJump(button) {
     await ensureWeekLoaded(nextIso);
     mobileNavIso = nextIso;
     activeWeekIso = nextIso;
+    targetWeekIso = nextIso;
     requestAnimationFrame(() => scrollToWeekStart(nextIso));
-    return;
-  }
-  // Desktop: Replace current week with next week
-  const baselineIso = formatISODate(getEffectiveWeekStart(new Date()));
-  const currentIso = activeWeekIso || baselineIso;
-  const nextIso = formatISODate(addDays(parseISODate(currentIso), WEEK_STEP));
-  await ensureWeekLoaded(nextIso);
-  if (!weekData.has(nextIso)) return;
-  activeWeekIso = nextIso;
-  currentRangeStart = parseISODate(activeWeekIso);
-  // On desktop, clear old weeks and keep only the active one
-  if (!isMobileViewport) {
+  } else {
+    // Desktop: Replace current week with next week
+    const baselineIso = formatISODate(getEffectiveWeekStart(new Date()));
+    const currentIso = activeWeekIso || baselineIso;
+    const nextIso = formatISODate(addDays(parseISODate(currentIso), WEEK_STEP));
+    await ensureWeekLoaded(nextIso);
+    if (!weekData.has(nextIso)) return;
+    activeWeekIso = nextIso;
+    targetWeekIso = nextIso;
+    currentRangeStart = parseISODate(activeWeekIso);
+    // On desktop, clear old weeks and keep only the active one
     const keepWeek = activeWeekIso;
     loadedWeeks.length = 0;
     if (keepWeek && weekData.has(keepWeek)) {
       loadedWeeks.push(keepWeek);
     }
+    renderCalendar();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
-  renderCalendar();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  
+  // Track calendar navigation
+  if (targetWeekIso) {
+    trackEvent('calendar_navigation', {
+      org: currentOrg || 'unknown',
+      direction: 'next',
+      week_start: targetWeekIso,
+      is_mobile: isMobileViewport
+    });
+  }
 }
 
 prevRangeBtn?.addEventListener('click', () => handlePrevJump(prevRangeBtn));
