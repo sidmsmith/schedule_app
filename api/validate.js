@@ -8,9 +8,10 @@ const CLIENT_SECRET = process.env.MANHATTAN_SECRET;
 const PASSWORD = process.env.MANHATTAN_PASSWORD;
 const USERNAME_BASE = process.env.MANHATTAN_USERNAME_BASE || "sdtadmin@";
 
-const HA_WEBHOOK_URL = process.env.HA_WEBHOOK_URL || "http://sidmsmith.zapto.org:8123/api/webhook/manhattan_app_usage";
+const USAGE_INGEST_URL = (process.env.MANHATTAN_USAGE_INGEST_URL || "").trim();
+const USAGE_INGEST_SECRET = (process.env.MANHATTAN_USAGE_INGEST_SECRET || "").trim();
 const APP_NAME = "schedule-app";
-const APP_VERSION = "0.1.5";
+const APP_VERSION = "0.1.6";
 
 // Get OAuth token
 async function getToken(org) {
@@ -54,24 +55,28 @@ async function apiCall(method, path, token, org, body = null) {
   return res.ok ? await res.json() : { error: await res.text() };
 }
 
-// Send HA message helper
-async function sendHAMessage(eventName, metadata = {}) {
+async function forwardUsageEvent(payload) {
+  if (!USAGE_INGEST_URL) {
+    console.warn("[usage] MANHATTAN_USAGE_INGEST_URL not set; event not recorded");
+    return;
+  }
+  const headers = { "Content-Type": "application/json" };
+  if (USAGE_INGEST_SECRET) {
+    headers.Authorization = `Bearer ${USAGE_INGEST_SECRET}`;
+  }
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), 8000);
   try {
-    const payload = {
-      event_name: eventName,
-      app_name: APP_NAME,
-      app_version: APP_VERSION,
-      timestamp: new Date().toISOString(),
-      ...metadata
-    };
-    
-    await fetch(HA_WEBHOOK_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+    await fetch(USAGE_INGEST_URL, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+      signal: controller.signal,
     });
   } catch (error) {
-    console.error('[HA] Failed to send message:', error.message);
+    console.warn("[usage] Forward failed:", error.message);
+  } finally {
+    clearTimeout(t);
   }
 }
 
@@ -86,11 +91,19 @@ export default async function handler(req, res) {
 
   const { action, org, lpn, code } = req.body;
 
-  // === HA TRACK ENDPOINT ===
-  if (action === 'ha-track') {
-    const { eventName, metadata } = req.body;
+  // === USAGE TRACK (dashboard ingest → Neon) ===
+  if (action === "usage-track") {
+    const eventName = req.body.event_name ?? req.body.eventName;
+    const metadata = req.body.metadata || {};
     if (eventName) {
-      await sendHAMessage(eventName, metadata);
+      const payload = {
+        event_name: eventName,
+        app_name: APP_NAME,
+        app_version: APP_VERSION,
+        ...metadata,
+        timestamp: new Date().toISOString(),
+      };
+      await forwardUsageEvent(payload);
     }
     return res.json({ success: true });
   }

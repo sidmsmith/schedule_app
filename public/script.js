@@ -211,12 +211,12 @@ function getCommonMetadata() {
   };
 }
 
-// === HA Tracking Helper ===
+// === Usage tracking (dashboard ingest → Neon) ===
 async function trackEvent(eventName, metadata = {}) {
   try {
     const commonMetadata = getCommonMetadata();
     const payload = {
-      eventName,
+      event_name: eventName,
       metadata: {
         ...commonMetadata,
         ...metadata
@@ -225,7 +225,7 @@ async function trackEvent(eventName, metadata = {}) {
     await fetch('/api/validate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'ha-track', ...payload })
+      body: JSON.stringify({ action: 'usage-track', ...payload })
     });
   } catch (error) {
     // Silent fail - don't interrupt user experience
